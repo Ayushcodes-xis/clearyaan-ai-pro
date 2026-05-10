@@ -1,25 +1,89 @@
-export default async function handler(req, res) {
-  // CORS Security taaki koi aur ise misuse na kare
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST');
+window.sendMsg = async () => {
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  const input = document.getElementById('userInput');
+  const text = input.value.trim();
+
+  if (!text) return;
+
+  // User Message Render
+  renderMessage('user', text);
+
+  chats[currentChatId].messages.push({
+    role: "user",
+    content: text
+  });
+
+  syncToCloud();
+
+  input.value = '';
+
+  // Typing Animation
+  const botUI = renderMessage('bot', '', true);
 
   try {
-    const { messages } = JSON.parse(req.body);
-    const API_KEY = process.env.GEMINI_API_KEY; // Ye key Vercel se aayegi, yahan nahi dikhegi
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
+    // Gemini Format
+    const messages = chats[currentChatId].messages.map(msg => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [
+        {
+          text: msg.content
+        }
+      ]
+    }));
+
+    // SECURE API CALL
+    const response = await fetch('/api/chat', {
+
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: messages })
+
+      headers: {
+        'Content-Type': 'application/json'
+      },
+
+      body: JSON.stringify({
+        messages: messages
+      })
+
     });
 
     const data = await response.json();
-    res.status(200).json(data);
+
+    // Error Handling
+    if (data.error) {
+
+      botUI.bubble.innerHTML =
+        "❌ " + data.error;
+
+      return;
+    }
+
+    // Gemini Reply
+    const reply =
+      data.candidates?.[0]?.content?.parts?.[0]?.text
+      || "No response received.";
+
+    // Streaming Effect
+    await streamTextEffect(
+      botUI.bubble,
+      reply,
+      botUI.contentDiv
+    );
+
+    // Save Chat
+    chats[currentChatId].messages.push({
+      role: "assistant",
+      content: reply
+    });
+
+    syncToCloud();
+
   } catch (error) {
-    res.status(500).json({ error: 'Server Error: ' + error.message });
+
+    console.error(error);
+
+    botUI.bubble.innerHTML =
+      "❌ Failed to connect to AI server.";
+
   }
-}
+};

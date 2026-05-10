@@ -1,89 +1,63 @@
-window.sendMsg = async () => {
+module.exports = async function handler(req, res) {
 
-  const input = document.getElementById('userInput');
-  const text = input.value.trim();
+  res.setHeader(
+    'Access-Control-Allow-Origin',
+    'https://clearyaan-ai-pro.vercel.app'
+  );
 
-  if (!text) return;
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'POST'
+  );
 
-  // User Message Render
-  renderMessage('user', text);
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type'
+  );
 
-  chats[currentChatId].messages.push({
-    role: "user",
-    content: text
-  });
-
-  syncToCloud();
-
-  input.value = '';
-
-  // Typing Animation
-  const botUI = renderMessage('bot', '', true);
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      error: 'Method not allowed'
+    });
+  }
 
   try {
 
-    // Gemini Format
-    const messages = chats[currentChatId].messages.map(msg => ({
-      role: msg.role === "user" ? "user" : "model",
-      parts: [
-        {
-          text: msg.content
-        }
-      ]
-    }));
+    const { messages } = req.body;
 
-    // SECURE API CALL
-    const response = await fetch('/api/chat', {
+    const API_KEY = process.env.GEMINI_API_KEY;
 
-      method: 'POST',
+    if (!API_KEY) {
+      return res.status(500).json({
+        error: 'Missing API key'
+      });
+    }
 
-      headers: {
-        'Content-Type': 'application/json'
-      },
-
-      body: JSON.stringify({
-        messages: messages
-      })
-
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: messages
+        })
+      }
+    );
 
     const data = await response.json();
 
-    // Error Handling
-    if (data.error) {
-
-      botUI.bubble.innerHTML =
-        "❌ " + data.error;
-
-      return;
-    }
-
-    // Gemini Reply
-    const reply =
-      data.candidates?.[0]?.content?.parts?.[0]?.text
-      || "No response received.";
-
-    // Streaming Effect
-    await streamTextEffect(
-      botUI.bubble,
-      reply,
-      botUI.contentDiv
-    );
-
-    // Save Chat
-    chats[currentChatId].messages.push({
-      role: "assistant",
-      content: reply
-    });
-
-    syncToCloud();
+    return res.status(200).json(data);
 
   } catch (error) {
 
     console.error(error);
 
-    botUI.bubble.innerHTML =
-      "❌ Failed to connect to AI server.";
+    return res.status(500).json({
+      error: 'Internal server error'
+    });
 
   }
-};
+
+        }

@@ -496,7 +496,7 @@
       updateSidebar();
     } catch(e) { console.error(e); }
   }
-        window.startNewChat = () => {
+    window.startNewChat = () => {
     if(isGenerating) return showToast("Wait for AI to finish", "error");
     currentChatId = 'chat_' + Date.now();
     chats[currentChatId] = { title: "New Intelligence", messages: [], pinned: false, updated: Date.now() };
@@ -545,5 +545,389 @@
           ${chat.title}
         </div>
         <div class="history-actions">
-          <span class="action-icon ${chat.pinned ? 'pin-active' : ''}" onclick="togglePin(event, '${id}')" title="Pin"><i class="fas fa-thumbtack"></i>
+          <span class="action-icon ${chat.pinned ? 'pin-active' : ''}" onclick="togglePin(event, '${id}')" title="Pin"><i class="fas fa-thumbtack"></i></span>
+          <span class="action-icon" onclick="renameChat(event, '${id}')" title="Rename"><i class="fas fa-pen"></i></span>
+          <span class="action-icon" style="color:var(--danger)" onclick="deleteChat(event, '${id}')" title="Delete"><i class="fas fa-trash"></i></span>
+        </div>`;
+      list.appendChild(item);
+    });
+  }
+
+  window.togglePin = (e, id) => {
+    e.stopPropagation();
+    chats[id].pinned = !chats[id].pinned;
+    chats[id].updated = Date.now();
+    syncToCloud();
+  };
+
+  window.renameChat = (e, id) => {
+    e.stopPropagation();
+    const newName = prompt("Enter new memory name:", chats[id].title);
+    if(newName && newName.trim()){
+      chats[id].title = newName.trim();
+      chats[id].updated = Date.now();
+      syncToCloud();
+      showToast("Memory renamed.");
+    }
+  };
+
+  window.deleteChat = (e, id) => {
+    e.stopPropagation();
+    if(!confirm("Erase this memory permanently?")) return;
+    delete chats[id];
+    if (currentChatId === id) {
+      const keys = Object.keys(chats);
+      if(keys.length > 0) loadChatToScreen(keys[keys.length - 1]);
+      else startNewChat();
+    } else { syncToCloud(); }
+    showToast("Memory erased.", "error");
+  };
+
+  window.filterChats = () => {
+    const q = document.getElementById('searchChat').value.toLowerCase();
+    document.querySelectorAll('.history-item').forEach(item => {
+      const title = item.querySelector('.history-title').innerText.toLowerCase();
+      // Search inside messages too (Deep Search)
+      const id = item.querySelector('.action-icon').getAttribute('onclick').match(/'([^']+)'/)[1];
+      const msgs = chats[id]?.messages.map(m=>m.content.toLowerCase()).join(' ') || '';
+      
+      item.style.display = (title.includes(q) || msgs.includes(q)) ? '' : 'none';
+    });
+    document.querySelectorAll('.history-group-title').forEach(t => t.style.display = q ? 'none' : '');
+  };
+
+  // ==========================================
+  // MOBILE UI & UX LOGIC
+  // ==========================================
+  window.toggleSidebar = (e) => { if(e) e.stopPropagation(); document.getElementById('sidebar').classList.toggle('open'); }
+  window.closeSidebarIfMobile = () => { if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open'); }
+  document.getElementById('mainArea').addEventListener('click', closeSidebarIfMobile);
+
+  function autoResize(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = (textarea.scrollHeight < 150 ? textarea.scrollHeight : 150) + 'px';
+  }
+
+  function handleEnter(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMsg();
+    }
+  }
+
+  // ==========================================
+  // CHAT RENDERING & STREAMING
+  // ==========================================
+  function parseAndFormatMarkdown(text) {
+    const rawHtml = marked.parse(text);
+    const div = document.createElement('div');
+    div.innerHTML = rawHtml;
+    // Add custom copy buttons to code blocks
+    div.querySelectorAll('pre').forEach(pre => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'code-block-wrapper';
+      const header = document.createElement('div');
+      header.className = 'code-header';
+      const lang = pre.querySelector('code')?.className.replace('language-', '') || 'code';
+      header.innerHTML = `<span>${lang}</span><button class="btn-copy-code" onclick="copyCode(this)"><i class="fas fa-copy"></i> Copy</button>`;
+      
+      pre.parentNode.insertBefore(wrapper, pre);
+      wrapper.appendChild(header);
+      wrapper.appendChild(pre);
+    });
+    return div.innerHTML;
+  }
+
+  window.copyCode = (btn) => {
+    const pre = btn.parentElement.nextElementSibling;
+    navigator.clipboard.writeText(pre.innerText);
+    btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+    btn.style.color = 'var(--success)';
+    setTimeout(() => {
+      btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+      btn.style.color = '#a6accd';
+    }, 2000);
+  };
+
+  function createMessageNode(role, imgSrc = null) {
+    const chatBox = document.getElementById('chat');
+    const wrapper = document.createElement('div');
+    wrapper.className = `msg-wrapper ${role}`;
+    
+    const avatar = document.createElement('div');
+    avatar.className = `avatar ${role}`;
+    avatar.innerHTML = role === 'bot' ? '<i class="fas fa-sparkles"></i>' : '<i class="fas fa-user-astronaut"></i>';
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'msg-content';
+    
+    if (imgSrc) {
+      const img = document.createElement('img');
+      img.src = imgSrc;
+      img.className = 'msg-image';
+      contentDiv.appendChild(img);
+    }
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    contentDiv.appendChild(bubble);
+    
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(contentDiv);
+    chatBox.appendChild(wrapper);
+    chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });
+    
+    return { wrapper, bubble, contentDiv };
+  }
+
+  function addMessageActions(contentDiv, text, role) {
+    if (contentDiv.querySelector('.msg-actions')) return;
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    
+    let html = `<span class="action-text-btn" onclick="copyText(\`${text.replace(/`/g, '\\`')}\`)"><i class="fas fa-copy"></i> Copy</span>`;
+    html += `<span class="action-text-btn" onclick="speakText(\`${text.replace(/`/g, '\\`')}\`)"><i class="fas fa-volume-up"></i> Speak</span>`;
+    
+    if(role === 'bot') {
+      html += `<span class="action-text-btn" onclick="regenerateLast()"><i class="fas fa-sync-alt"></i> Retry</span>`;
+    }
+    
+    actions.innerHTML = html;
+    contentDiv.appendChild(actions);
+  }
+
+  window.copyText = (text) => { navigator.clipboard.writeText(text); showToast("Text copied."); };
+
+  function renderMessage(role, text, isStream = false, imgSrc = null) {
+    const { bubble, contentDiv } = createMessageNode(role, imgSrc);
+    
+    if (isStream) {
+      bubble.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    } else {
+      bubble.innerHTML = parseAndFormatMarkdown(text);
+      addMessageActions(contentDiv, text, role);
+    }
+    return { bubble, contentDiv };
+  }
+
+  // Simulated Streaming Effect for Premium Feel
+  async function streamResponse(bubble, contentDiv, fullText) {
+    bubble.innerHTML = '';
+    const words = fullText.split(/(?<=\s|-)/); // Split by words keeping spaces
+    let currentText = '';
+    
+    // Quick burst streaming
+    for (let i = 0; i < words.length; i++) {
+      currentText += words[i];
+      // Every 5 words or at end, render markdown to prevent layout trashing
+      if(i % 5 === 0 || i === words.length - 1) {
+        bubble.innerHTML = parseAndFormatMarkdown(currentText);
+        const chatBox = document.getElementById('chat');
+        chatBox.scrollTop = chatBox.scrollHeight;
+        await new Promise(r => setTimeout(r, 15)); // 15ms delay chunk
+      }
+    }
+    addMessageActions(contentDiv, fullText, 'bot');
+  }
+
+  // ==========================================
+  // IMAGE UPLOAD & DRAG/DROP
+  // ==========================================
+  function handleImageSelect(e) {
+    const file = e.target.files[0];
+    if(file) readImageFile(file);
+    e.target.value = ''; // reset
+  }
+
+  function readImageFile(file) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      pendingImageBase64 = event.target.result;
+      document.getElementById('previewImg').src = pendingImageBase64;
+      document.getElementById('imgPreviewStrip').style.display = 'flex';
+      document.getElementById('userInput').focus();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  window.removeImage = () => {
+    pendingImageBase64 = null;
+    document.getElementById('previewImg').src = '';
+    document.getElementById('imgPreviewStrip').style.display = 'none';
+  };
+
+  // Drag and Drop Logic
+  const mainArea = document.getElementById('mainArea');
+  const dragOverlay = document.getElementById('dragOverlay');
+
+  mainArea.addEventListener('dragover', (e) => { e.preventDefault(); dragOverlay.style.display = 'flex'; });
+  mainArea.addEventListener('dragleave', (e) => { e.preventDefault(); if(e.target === dragOverlay) dragOverlay.style.display = 'none'; });
+  mainArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragOverlay.style.display = 'none';
+    if(e.dataTransfer.files && e.dataTransfer.files[0]) readImageFile(e.dataTransfer.files[0]);
+  });
+
+  // ==========================================
+  // VOICE INPUT
+  // ==========================================
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition;
+  if (SpeechRecognition) {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onstart = () => { isRecording = true; document.getElementById('micBtn').classList.add('recording'); showToast("Listening...", "success"); };
+    recognition.onresult = (e) => { 
+      const input = document.getElementById('userInput');
+      input.value += (input.value ? ' ' : '') + e.results[0][0].transcript;
+      autoResize(input);
+    };
+    recognition.onend = () => { isRecording = false; document.getElementById('micBtn').classList.remove('recording'); };
+    recognition.onerror = () => { isRecording = false; document.getElementById('micBtn').classList.remove('recording'); showToast("Voice recognition failed", "error"); };
+  }
+
+  function toggleVoiceInput() {
+    if (!SpeechRecognition) return showToast("Voice input not supported in this browser.", "error");
+    if (isRecording) recognition.stop(); else recognition.start();
+  }
+
+  function speakText(text) {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  }
+
+  // ==========================================
+  // EXPORT FUNCTIONS
+  // ==========================================
+  window.exportData = () => {
+    if (!chats[currentChatId] || chats[currentChatId].messages.length === 0) return showToast("Nothing to export.", "error");
+    
+    const choice = confirm("Press OK for PDF, Cancel for TXT");
+    const msgs = chats[currentChatId].messages;
+    const title = chats[currentChatId].title;
+    
+    if (choice) {
+      // PDF Export
+      const element = document.createElement('div');
+      element.style.padding = '20px';
+      element.style.fontFamily = 'sans-serif';
+      element.innerHTML = `<h2>${title}</h2>` + msgs.map(m => `<b>${m.role.toUpperCase()}:</b><br>${marked.parse(m.content)}<br><hr>`).join('');
+      html2pdf().set({ margin: 10, filename: `${title}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(element).save();
+      showToast("Downloading PDF...");
+    } else {
+      // TXT Export
+      const text = msgs.map(m => `${m.role.toUpperCase()}:\n${m.content}\n`).join('\n-----------------------\n\n');
+      const blob = new Blob([text], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${title}.txt`;
+      a.click();
+      showToast("Downloading TXT...");
+    }
+  };
+
+  // ==========================================
+  // CORE API COMMUNICATION
+  // ==========================================
+  window.regenerateLast = () => {
+    if(!chats[currentChatId] || chats[currentChatId].messages.length < 2) return;
+    // Remove last bot message
+    if(chats[currentChatId].messages[chats[currentChatId].messages.length-1].role === 'bot') {
+      chats[currentChatId].messages.pop();
+    }
+    // Delete from UI (quick re-render)
+    loadChatToScreen(currentChatId);
+    // Trigger Send
+    executeSendRequest(null);
+  }
+
+  async function sendMsg() {
+    if (isGenerating) return;
+    const input = document.getElementById('userInput');
+    const text = input.value.trim();
+    const hasImage = !!pendingImageBase64;
+    
+    if (!text && !hasImage) return;
+
+    input.value = '';
+    input.style.height = 'auto'; // reset
+    if (!chats[currentChatId]) startNewChat();
+
+    // Prepare User Message Object
+    const userMsg = { role: 'user', content: text, parts: [] };
+    if(text) userMsg.parts.push({ text: text });
+    
+    const imgSrcToRender = pendingImageBase64; // Store for UI
+    
+    if (pendingImageBase64) {
+      const base64Data = pendingImageBase64.split(',')[1];
+      const mimeType = pendingImageBase64.match(/data:(.*?);base64/)[1];
+      userMsg.parts.push({ inlineData: { data: base64Data, mimeType } });
+      userMsg.imgSrc = pendingImageBase64; // Temporarily save for UI render
+      removeImage(); // Clear UI
+    }
+
+    chats[currentChatId].messages.push(userMsg);
+    chats[currentChatId].updated = Date.now();
+    
+    // Auto title generation
+    if (chats[currentChatId].messages.length === 1 && text) {
+      chats[currentChatId].title = text.substring(0, 30) + (text.length > 30 ? '...' : '');
+    }
+
+    renderMessage('user', text, false, imgSrcToRender);
+    await executeSendRequest();
+  }
+
+  async function executeSendRequest() {
+    isGenerating = true;
+    document.getElementById('sendBtn').disabled = true;
+    const { bubble, contentDiv } = renderMessage('bot', '', true); // Show typing
+
+    // Prepare exactly what Vercel needs (and strip Base64 from previous history to avoid giant payloads)
+    const geminiMessages = chats[currentChatId].messages.map(m => {
+      let finalParts = m.parts || [{ text: m.content }];
+      return {
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: finalParts
+      };
+    });
+
+    const selectedModel = document.getElementById('aiModel').value;
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          messages: geminiMessages,
+          model: selectedModel
+        })
+      });
+
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || "Response assimilation failed.";
+
+      // Stream the response
+      await streamResponse(bubble, contentDiv, reply);
+
+      chats[currentChatId].messages.push({ role: 'bot', content: reply });
+      chats[currentChatId].updated = Date.now();
+      syncToCloud(); 
+
+    } catch(err) {
+      bubble.innerHTML = `<span style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Quantum connection lost. Please verify your Vercel backend and API key.</span>`;
+      console.error(err);
+      chats[currentChatId].messages.pop(); // Remove user msg if failed completely
+    } finally {
+      isGenerating = false;
+      document.getElementById('sendBtn').disabled = false;
+      if(window.innerWidth > 768) document.getElementById('userInput').focus();
+    }
+  }
+</script>
+</body>
+</html>
   
